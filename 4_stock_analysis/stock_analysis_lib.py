@@ -19,6 +19,10 @@ from pandas_datareader import data as pdr
 from datetime import date
 from langchain.prompts.prompt import PromptTemplate
 import yfinance as yf
+
+import boto3
+from langchain_community.chat_models import BedrockChat
+
 yf.pdr_override() 
 
 def get_llm():
@@ -33,6 +37,30 @@ def get_llm():
         streaming=True)
 
     return llm
+
+def get_claude3():
+    bedrock_runtime = boto3.client(
+        service_name="bedrock-runtime",
+        region_name="us-east-1",
+    )
+
+    model_id = "anthropic.claude-3-sonnet-20240229-v1:0"
+
+    model_kwargs =  { 
+        "max_tokens": 2048,
+        "temperature": 0.0,
+        "top_k": 250,
+        "top_p": 1,
+        "stop_sequences": ["\n\nSQLQuery: ", "\n\nHuman: "],
+    }
+
+    model = BedrockChat(
+        client=bedrock_runtime,
+        model_id=model_id,
+        model_kwargs=model_kwargs,
+    )
+        
+    return model
 
 def get_db_chain(prompt):
     db = SQLDatabase.from_uri("sqlite:///stock_ticker_database.db")
@@ -49,7 +77,7 @@ def get_db_chain(prompt):
 def get_stock_ticker(query):
     template = """You are a helpful assistant who extract company name from the human input.Please only output the company"""
     human_template = "{text}"
-    llm = get_llm()
+    llm = get_claude3()
 
     chat_prompt = ChatPromptTemplate.from_messages([
         ("system", template),
@@ -199,15 +227,15 @@ tools=[
 from langchain.agents import initialize_agent 
 def initializeAgent():
     agent=initialize_agent(
-    llm=get_llm(),
-    agent="zero-shot-react-description",
-    tools=tools,
-    verbose=True,
-    max_iteration=2,
-    return_intermediate_steps=True,
-    handle_parsing_errors=True,
-    output_key="output",
-)
+        llm=get_claude3(),
+        agent="zero-shot-react-description",
+        tools=tools,
+        verbose=True,
+        max_iteration=2,
+        return_intermediate_steps=True,
+        handle_parsing_errors=True,
+        output_key="output",
+    )
 
 
     prompt="""Human: You are a financial advisor. Give stock recommendations for given query based on following instructions. 
