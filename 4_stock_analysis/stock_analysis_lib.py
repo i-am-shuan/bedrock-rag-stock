@@ -2,7 +2,8 @@ import os
 from langchain.memory import ConversationBufferWindowMemory
 from langchain.llms.bedrock import Bedrock
 from langchain.chains import ConversationalRetrievalChain
-
+import boto3
+from langchain_aws import ChatBedrock
 from langchain.embeddings import BedrockEmbeddings
 from langchain.indexes import VectorstoreIndexCreator
 from langchain.vectorstores import FAISS
@@ -20,14 +21,10 @@ from datetime import date
 from langchain.prompts.prompt import PromptTemplate
 import yfinance as yf
 
-import boto3
-from langchain_community.chat_models import BedrockChat
-
 yf.pdr_override() 
-
-def get_llm():
+def get_llm(k = 1):
         
-    model_parameter = {"temperature": 0.0, "top_p": .5, "max_tokens_to_sample": 2000}
+    model_parameter = {"temperature": 0.0, "top_p": .5, "top_k": k, "max_tokens_to_sample": 2000, "stop_sequences": ["SQLResult: "]}
     llm = Bedrock(
         credentials_profile_name=os.environ.get("BWB_PROFILE_NAME"), #sets the profile name to use for AWS credentials (if not the default)
         region_name="us-east-1", #sets the region name (if not the default)
@@ -38,7 +35,7 @@ def get_llm():
 
     return llm
 
-def get_claude3():
+def get_claude3(k = 1):
     bedrock_runtime = boto3.client(
         service_name="bedrock-runtime",
         region_name="us-east-1",
@@ -47,14 +44,14 @@ def get_claude3():
     model_id = "anthropic.claude-3-sonnet-20240229-v1:0"
 
     model_kwargs =  { 
-        "max_tokens": 2048,
+        "max_tokens": 4096,
         "temperature": 0.0,
-        "top_k": 250,
+        "top_k": k,
         "top_p": 1,
         "stop_sequences": ["\n\nHuman: "],
     }
 
-    model = BedrockChat(
+    model = ChatBedrock(
         client=bedrock_runtime,
         model_id=model_id,
         model_kwargs=model_kwargs,
@@ -64,20 +61,21 @@ def get_claude3():
 
 def get_db_chain(prompt):
     db = SQLDatabase.from_uri("sqlite:///stock_ticker_database.db")
-    llm = get_llm()
+    llm = get_llm(k = 1)
     db_chain = SQLDatabaseChain.from_llm(
         llm, 
         db, 
         verbose=True, 
         return_intermediate_steps=True, 
         prompt=prompt, 
+        top_k=1,
     )
     return db_chain
     
 def get_stock_ticker(query):
-    template = """You are a helpful assistant who extract company name from the human input.Please only output the company"""
+    template = """You are a helpful assistant who extract company name from the human input. Please only output the company. If the human input is written in Korean, Just return it. If you can not find company name, just return NONE"""
     human_template = "{text}"
-    llm = get_llm()
+    llm = get_claude3(k = 1)
 
     chat_prompt = ChatPromptTemplate.from_messages([
         ("system", template),
@@ -90,8 +88,10 @@ def get_stock_ticker(query):
     )
 
     company_name=llm_chain(query)['text'].strip()
+    if "NONE" == company_name:
+        return query, None
     
-    _DEFAULT_TEMPLATE = """Human: Given an input question, first create a syntactically correct {dialect} query to run, then look at the results of the query and return the answer.
+    _DEFAULT_TEMPLATE = """Human: Given an input question, first create a syntactically correct {dialect} query to run, then look at the results of the query and return the first answer.
 <format>
 Question: "Question here"
 SQLQuery: "SQL Query to run"
@@ -118,7 +118,7 @@ Question:
         Params: 
         Company name (name): Amazon
         
-SQLQuery:SELECT symbol FROM stock_ticker WHERE name LIKE '%Amazon%'
+SQLQuery:SELECT name, symbol FROM stock_ticker WHERE name = 'Amazon' union SELECT name, symbol FROM stock_ticker WHERE name like '%Amazon%' limit 1
 
 </examples>
 
@@ -131,8 +131,14 @@ Question: \n\nHuman:{input} \n\nAssistant:
 )
     db_chain = get_db_chain(PROMPT)
 
-    company_ticker = db_chain("\n\nHuman: What is the ticker symbol for " + str(company_name) + " in stock ticker table? \n\nAssistant:")
-    return company_name, company_ticker['result']
+    company_ticker = db_chain("\n\nHuman: What is the ticker symbol for " + str(company_name) + " in stock tickers table? \n\nAssistant:")
+    
+    # print("!!!!!!!!!!!!!!!!!")
+    # print(company_ticker)
+    # print("@@@@@@@@@@@@@@@@")
+    # print(company_ticker['result'])
+
+    return company_ticker['result']
 
 def get_stock_price(ticker, history=500):
     today = date.today()
@@ -184,10 +190,10 @@ def stock_news_search(company_name):
 
 # Get financial statements from Yahoo Finance
 def get_financial_statements(ticker):
-    if "." in ticker:
-        ticker=ticker.split(".")[0]
-    else:
-        ticker=ticker
+    # if "." in ticker:
+    #     ticker=ticker.split(".")[0]
+    # else:
+    #     ticker=ticker
     company = yf.Ticker(ticker.strip())
     balance_sheet = company.balance_sheet
     if balance_sheet.shape[1]>=3:
@@ -196,26 +202,23 @@ def get_financial_statements(ticker):
     balance_sheet = balance_sheet.to_string()
     return balance_sheet
 
-from langchain.agents import load_tools
-from langchain.agents import initialize_agent, Tool
-from langchain.agents import AgentType
-from langchain import LLMMathChain
+from langchain.agents import Tool
 
 tools=[
     Tool(
         name="get company ticker",
         func=get_stock_ticker,
-        description="Get the company stock ticker"
+        description="Get the company name and stock ticker. You should input the company name to it. If input is written in Korean, do not translate it."
     ),
     Tool(
         name="get stock data",
         func=get_stock_price,
-        description="Use when you are asked to evaluate or analyze a stock. This will output historic share price data. You should input the the stock ticker to it "
+        description="Use when you are asked to evaluate or analyze a stock. This will output historic share price data. You should input the the stock ticker from the result of 'get company ticker' to it "
     ),
     Tool(
         name="get recent news",
         func=get_recent_stock_news,
-        description="Use this to fetch recent news about stocks"
+        description="Use this to fetch recent news about stocks. You should input company name from the result of 'get company ticker' to it"
     ),
 
     Tool(
@@ -226,17 +229,17 @@ tools=[
 
 ]
 
-template="""Human: You are a financial advisor. Give stock recommendations for given query based on following instructions. 
+template="""Human: You are a financial advisor. Give stock recommendations for now using given query based on following instructions and suggest actual target price next 3 months based on current price.
 <instructions>
-Answer the following questions as best you can. You have access to the following tools:
+Answer the following questions as best you can using stock data, recent news, and financial statements. You have access to the following tools, and you should use every follwing tools:
 
 {tools}
 
 </instructions>
 
 <steps>
-Note- if you fail in satisfying any of the step below, Just move to next one
-1) Use "get company ticker" tool to get the company name and stock ticker. Output- company name and stock ticker
+Note- 
+1) Use "get company ticker" tool to get the company name and stock ticker. Output- company name and stock ticker.
 2) Use "get stock data" tool to gather financial info. Output- Stock data
 3) Use "get recent news" tool to search for latest stock realted recent news. Output- Stock news
 4) Use "get financial statements" tool to get company's historic financial performance data. Output- Financial statement
@@ -245,13 +248,16 @@ Note- if you fail in satisfying any of the step below, Just move to next one
 
 Use the following format:
 Question: the input question you must answer
-Thought: you should always think about what to do, Also try to follow steps mentioned above
+Thought: you should always think about what to do, you should follow steps mentioned above
 Action: the action to take, should be one of [{tool_names}]
 Action Input: the input to the action
 Observation: the result of the action
-... (this Thought/Action/Action Input/Observation can not repeat)
+(this Thought/Action/Action Input/Observation can repeat once)
 Thought: I now know the final answer
-Final Answer: the final answer and with detail explanation to the original input question. 
+Final Answer: the final answer with detail explanation to the original input question using each aspect you gathered. 
+If you cannot get all information, just say "I cannot give any advices because of lacking of information."
+
+You should translate only the message in Final Answer into Korean, the others should be returned in English. Don't translate anything else. "최종답변" must be translated into "Final Answer".
 
 Question: {input}
 
@@ -267,10 +273,11 @@ def initializeAgent():
     agent = create_react_agent(llm=get_claude3(), tools=tools, prompt=prompt)
     agent_executor = AgentExecutor(
         agent=agent,
-        max_iterations=5,
+        # max_iterations=5,
         tools=tools, 
         verbose=True, 
-        handle_parsing_errors=True
+        handle_parsing_errors=True,
+        return_intermediate_steps=True,
     )
 
     return agent_executor
