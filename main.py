@@ -12,7 +12,7 @@ from PIL import Image
 
 
 
-st.sidebar.success("Select a a tool below.")
+#st.sidebar.success("Select a a tool below.")
 
 image = Image.open('Artificial-Intelligence-Stocks.jpg')
 st.image(image, caption='')
@@ -25,5 +25,6 @@ page_names_to_funcs = {
     "Stock Query": stock_query,
 }
 
-demo_name = st.sidebar.selectbox("Choose a demo", page_names_to_funcs.keys())
+#demo_name = st.sidebar.selectbox("Choose a demo", page_names_to_funcs.keys())
+demo_name = "Stock Analysis"
 page_names_to_funcs[demo_name]()
