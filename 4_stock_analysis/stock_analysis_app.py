@@ -14,7 +14,7 @@ def print_result(st, response):
         df['Volume'] = df['Volume']/10000000
         df.rename(columns={'Close':'Price(USD)','Volume':'Volume(10 millions)'},inplace=True)
         st.line_chart(df)
-        st.subheader("Conclusion:")
+        st.subheader("결과:")
         st.write(response['output'])
     except:
         st.write(response['output'])
