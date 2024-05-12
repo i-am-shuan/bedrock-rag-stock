@@ -1,21 +1,13 @@
 import os
-from langchain.memory import ConversationBufferWindowMemory
 from langchain.llms.bedrock import Bedrock
-from langchain.chains import ConversationalRetrievalChain
 import boto3
 from langchain_aws import ChatBedrock
-from langchain.embeddings import BedrockEmbeddings
-from langchain.indexes import VectorstoreIndexCreator
-from langchain.vectorstores import FAISS
-from langchain.text_splitter import RecursiveCharacterTextSplitter
-from langchain.document_loaders import PyPDFLoader
-import json
 from langchain.utilities import SQLDatabase
 from langchain_experimental.sql import SQLDatabaseChain
 from langchain.tools import DuckDuckGoSearchRun
 from langchain.prompts.chat import ChatPromptTemplate
 from langchain.chains import LLMChain
-from datetime import datetime, timedelta
+from datetime import timedelta
 from pandas_datareader import data as pdr
 from datetime import date
 from langchain.prompts.prompt import PromptTemplate
@@ -66,14 +58,15 @@ def get_db_chain(prompt):
         llm, 
         db, 
         verbose=True, 
-        return_intermediate_steps=True, 
+        return_intermediate_steps=False,
+        return_direct=True, 
         prompt=prompt, 
         top_k=1,
     )
     return db_chain
     
 def get_stock_ticker(query):
-    template = """You are a helpful assistant who extract company name from the human input. Please only output the company. If the human input is written in Korean, Just return it. If you can not find company name, just return NONE"""
+    template = """You are a helpful assistant who extract company name from the human input. Please only output the company. If the human input is written in Korean, return the human input as the company name. If you can not find company name, just return NONE"""
     human_template = "{text}"
     llm = get_claude3(k = 1)
 
@@ -87,11 +80,11 @@ def get_stock_ticker(query):
         prompt=chat_prompt
     )
 
-    company_name=llm_chain(query)['text'].strip()
+    company_name=llm_chain(query.strip())['text'].strip()
     if "NONE" == company_name:
-        return query, None
+        return None
     
-    _DEFAULT_TEMPLATE = """Human: Given an input question, first create a syntactically correct {dialect} query to run, then look at the results of the query and return the first answer.
+    _DEFAULT_TEMPLATE = """Human: Given an input question, first create a syntactically correct {dialect} query to run, then look at the results of the query and return the first answer. 
 <format>
 Question: "Question here"
 SQLQuery: "SQL Query to run"
@@ -118,7 +111,7 @@ Question:
         Params: 
         Company name (name): Amazon
         
-SQLQuery:SELECT name, symbol FROM stock_ticker WHERE name = 'Amazon' union SELECT name, symbol FROM stock_ticker WHERE name like '%Amazon%' limit 1
+SQLQuery:SELECT symbol FROM stock_ticker WHERE name = 'Amazon' union all SELECT symbol FROM stock_ticker WHERE name like '%Amazon%' limit 1
 
 </examples>
 
@@ -132,12 +125,9 @@ Question: \n\nHuman:{input} \n\nAssistant:
     db_chain = get_db_chain(PROMPT)
 
     company_ticker = db_chain("\n\nHuman: What is the ticker symbol for " + str(company_name) + " in stock tickers table? \n\nAssistant:")
-    
-    # print("!!!!!!!!!!!!!!!!!")
-    # print(company_ticker)
-    # print("@@@@@@@@@@@@@@@@")
-    # print(company_ticker['result'])
 
+    if company_ticker['result'] == '':
+        return None
     return company_ticker['result']
 
 def get_stock_price(ticker, history=500):
@@ -206,32 +196,32 @@ from langchain.agents import Tool
 
 tools=[
     Tool(
-        name="get company ticker",
+        name="get stock ticker",
         func=get_stock_ticker,
-        description="Get the company name and stock ticker. You should input the company name to it. If input is written in Korean, do not translate it."
+        description="Get the company name and stock ticker. You should input the company name to it. If the company name is written in Korean, do not translate it. If there are no output, simply say “Sorry. I can’t advice financial recommendation because of lack of information.”."
     ),
     Tool(
-        name="get stock data",
+        name="get stock price",
         func=get_stock_price,
-        description="Use when you are asked to evaluate or analyze a stock. This will output historic share price data. You should input the the stock ticker from the result of 'get company ticker' to it "
+        description="Use when you are asked to evaluate or analyze a stock. This will output historic share price data. You should input the the stock ticker from the result of 'get stock ticker' to it."
     ),
     Tool(
         name="get recent news",
         func=get_recent_stock_news,
-        description="Use this to fetch recent news about stocks. You should input company name from the result of 'get company ticker' to it"
+        description="Use this tool to fetch recent company news. You should input company name to it."
     ),
 
     Tool(
         name="get financial statements",
         func=get_financial_statements,
-        description="Use this to get financial statement of the company. With the help of this data companys historic performance can be evaluaated. You should input stock ticker to it"
+        description="Use this to get financial statement of the company. With the help of this data companys historic performance can be evaluated. You should input stock ticker to it"
     ) 
 
 ]
 
-template="""Human: You are a financial advisor. Give stock recommendations for now using given query based on following instructions and suggest actual target price next 3 months based on current price.
+template="""Human: You are a financial advisor, but you don't know recent news about the company at all. Give stock recommendations for now using given query based on following instructions. If you cannot find stock ticker from following tools, stop giving advice and simply say “I can’t advice because of lack of information”.
 <instructions>
-Answer the following questions as best you can using stock data, recent news, and financial statements. You have access to the following tools, and you should use every follwing tools:
+Answer the following questions as best you can using stock price, recent news, and financial statements. You have access to the following tools, and you must use every follwing tools:
 
 {tools}
 
@@ -239,26 +229,24 @@ Answer the following questions as best you can using stock data, recent news, an
 
 <steps>
 Note- 
-1) Use "get company ticker" tool to get the company name and stock ticker. Output- company name and stock ticker.
-2) Use "get stock data" tool to gather financial info. Output- Stock data
-3) Use "get recent news" tool to search for latest stock realted recent news. Output- Stock news
+1) Use "get company ticker" tool to get the stock ticker. Output- stock ticker.
+2) Use "get stock price" tool to gather stock price info. Output- Stock price
+3) Use "get recent news" tool to search for company's recent news. Output- recent news
 4) Use "get financial statements" tool to get company's historic financial performance data. Output- Financial statement
-5) Analyze the stock based on gathered data and give detail analysis for investment choice. provide numbers and reasons to justify your answer. Output- Detailed stock Analysis
+5) Analyze the stock based on gathered data(price data, recent news, and financial) and give detail analysis for investment choice. provide numbers and reasons to justify your answer. provide target price of next 6 months based on closing price on {today} from stock price data you gathered. Output- Detailed stock Analysis
 </steps>
 
 Use the following format:
 Question: the input question you must answer
-Thought: you should always think about what to do, you should follow steps mentioned above
+Thought: you should always think about what to do, you must follow steps mentioned above
 Action: the action to take, should be one of [{tool_names}]
 Action Input: the input to the action
 Observation: the result of the action
-(this Thought/Action/Action Input/Observation can repeat once)
+... (this Thought/Action/Action Input/Observation can repeat N times)
 Thought: I now know the final answer
-Final Answer: the final answer with detail explanation to the original input question using each aspect you gathered. 
+Final Answer: the final answer should be written with detail explanation to the original input question using each aspect you gathered. 
 If you cannot get all information, just say "I cannot give any advices because of lacking of information."
-
-You should translate only the message in Final Answer into Korean, the others should be returned in English. Don't translate anything else. "최종답변" must be translated into "Final Answer".
-
+You should translate only the message in Final Answer to Korean, the others should be written in English. Don't translate anything else. Say "Final Answer" instead of "최종답변".
 Question: {input}
 
 Assistant:
@@ -273,7 +261,7 @@ def initializeAgent():
     agent = create_react_agent(llm=get_claude3(), tools=tools, prompt=prompt)
     agent_executor = AgentExecutor(
         agent=agent,
-        # max_iterations=5,
+        max_iterations=7,
         tools=tools, 
         verbose=True, 
         handle_parsing_errors=True,
