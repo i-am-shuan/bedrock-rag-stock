@@ -25,9 +25,11 @@ def print_result(st, response):
 def print_result(st, response):
     try:
         st.subheader("일별 주가:")
+        st.dataframe(response['intermediate_steps'][1][1])
 
         # 1. 주가 데이터 표로 출력
         # 1.1 데이터프레임 준비
+        '''
         df = pd.DataFrame(response['intermediate_steps'][1][1], columns=['Close', 'Open', 'High', 'Low', 'Volume'])
 
         # 1.2 인덱스를 datetime 형식으로 변환
@@ -47,6 +49,7 @@ def print_result(st, response):
             'Low': '{:.2f}',
             'Volume': '{:,.0f}'
         }), use_container_width=True)
+        '''
     except:
         print("Fail to draw price data table")
 
@@ -103,7 +106,7 @@ def print_result(st, response):
         
     try:
         # 3. 재무 제표 출력
-        st.subheader("재무제표:")
+        st.subheader("재무 제표:")
         print(response['intermediate_steps'][3][1])
         fs_df = pd.DataFrame(response['intermediate_steps'][3][1])
         fs_df.columns = pd.to_datetime(fs_df.columns, format='%Y-%m-%d').year
