@@ -3,6 +3,7 @@ import stock_analysis_lib as glib
 import stock_analysis_database_lib as databaselib 
 from langchain.callbacks import StreamlitCallbackHandler
 import time
+from datetime import date
 import pandas as pd
 
 def print_result(st, response):
@@ -39,6 +40,7 @@ def stock_analysis():
         st_callback = StreamlitCallbackHandler(st.container())
         response = agent({
             "input": input_text,
+            "today": date.today(),
             "chat_history": st.session_state.chat_history,
          },
             callbacks=[st_callback])
