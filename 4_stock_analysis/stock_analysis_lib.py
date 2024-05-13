@@ -189,7 +189,6 @@ def get_financial_statements(ticker):
     if balance_sheet.shape[1]>=3:
         balance_sheet=balance_sheet.iloc[:,:3]    # Only captures last 3 years of data
     balance_sheet=balance_sheet.dropna(how="any")
-    balance_sheet = balance_sheet.to_string()
     return balance_sheet
 
 from langchain.agents import Tool
