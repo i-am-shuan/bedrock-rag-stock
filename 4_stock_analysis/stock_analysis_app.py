@@ -25,7 +25,7 @@ def print_result(st, response):
 def print_result(st, response):
     try:
         st.subheader("일별 주가:")
-        st.dataframe(response['intermediate_steps'][1][1])
+        st.dataframe(response['intermediate_steps'][1][1], use_container_width=True)
 
         # 1. 주가 데이터 표로 출력
         # 1.1 데이터프레임 준비
@@ -110,8 +110,9 @@ def print_result(st, response):
         print(response['intermediate_steps'][3][1])
         fs_df = pd.DataFrame(response['intermediate_steps'][3][1])
         fs_df.columns = pd.to_datetime(fs_df.columns, format='%Y-%m-%d').year
+        st.dataframe(fs_df, use_container_width=True)
 
-        st.write(fs_df)
+        #st.write(fs_df)
     except:
         print("Fail to draw financial statement")
 
