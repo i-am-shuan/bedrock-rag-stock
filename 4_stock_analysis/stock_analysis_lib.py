@@ -66,7 +66,7 @@ def get_db_chain(prompt):
     return db_chain
     
 def get_stock_ticker(query):
-    # 입력받은 문장에서 회사명을 추출하는 프롬프트
+    #입력된 문장에서 회사명을 추출하는 프롬프트
     template = """You are a helpful assistant who extract company name from the human input. Please only output the company. If the human input is written in Korean, return the human input as the company name. If you can not find company name, just return NONE"""
     human_template = "{text}"
     llm = get_claude3(k = 1)
@@ -84,7 +84,7 @@ def get_stock_ticker(query):
     company_name=llm_chain(query.strip())['text'].strip()
     if "NONE" == company_name:
         return None
-    
+    #사용자로부터 자연어로 입력된 질문을 받아, 이를 DB 쿼리로 변환하고, 실행 결과를 통해 '종목코드'를 제공
     _DEFAULT_TEMPLATE = """Human: Given an input question, first create a syntactically correct {dialect} query to run, then look at the results of the query and return the first answer. 
 <format>
 Question: "Question here"
