@@ -66,6 +66,7 @@ def get_db_chain(prompt):
     return db_chain
     
 def get_stock_ticker(query):
+    # 입력받은 문장에서 회사명을 추출하는 프롬프트
     template = """You are a helpful assistant who extract company name from the human input. Please only output the company. If the human input is written in Korean, return the human input as the company name. If you can not find company name, just return NONE"""
     human_template = "{text}"
     llm = get_claude3(k = 1)
