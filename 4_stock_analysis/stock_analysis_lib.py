@@ -13,6 +13,7 @@ from datetime import date
 from langchain.prompts.prompt import PromptTemplate
 import yfinance as yf
 
+#test
 yf.pdr_override() 
 def get_llm(k = 1):
         
@@ -64,12 +65,47 @@ def get_db_chain(prompt):
         top_k=1,
     )
     return db_chain
+
+
+##############################################################
+
+def get_stock_code_from_api(company_name):
+    url = "https://oapi.kbsec.com/v2.0/NIVS01/search-ticker"
+    headers = {
+        "Content-Type": "application/json",
+        "apikey": "l7xxESFi1ld7pk0ZAJKZDLGNRTcBLhtfJnRh"
+    }
+    data = {
+        "dataHeader": {
+            "udId": "UDID"
+        },
+        "dataBody": {
+            "isNm": company_name
+        }
+    }
+    
+    response = requests.post(url, json=data, headers=headers)
+    
+    if response.status_code == 200:
+        response_data = response.json()
+        
+        print('@@@@@@@@@@@@@@response_data: ', response_data)
+        
+        if response_data["dataHeader"]["resultCode"] == "200":
+            stock_info = response_data["dataBody"]["out2"][0]
+            stock_code = stock_info["isCd"].strip()
+            market_class = stock_info["mktClsf"].strip()
+            
+            if market_class == '1':
+                return f"{stock_code}.KS"
+            elif market_class == '2':
+                return f"{stock_code}.KQ"
+    return None
     
 def get_stock_ticker(query):
-    #입력된 문장에서 회사명을 추출하는 프롬프트
-    template = """You are a helpful assistant who extract company name from the human input. Please only output the company. If the human input is written in Korean, return the human input as the company name. If you can not find company name, just return NONE"""
+    template = """You are a helpful assistant who extracts company name from the human input. Please only output the company. If the human input is written in Korean, return the human input as the company name. If you cannot find company name, just return NONE."""
     human_template = "{text}"
-    llm = get_claude3(k = 1)
+    llm = get_claude3(k=1)
 
     chat_prompt = ChatPromptTemplate.from_messages([
         ("system", template),
@@ -81,61 +117,29 @@ def get_stock_ticker(query):
         prompt=chat_prompt
     )
 
-    company_name=llm_chain(query.strip())['text'].strip()
+    company_name = llm_chain(query.strip())['text'].strip()
     if "NONE" == company_name:
         return None
-    #사용자로부터 자연어로 입력된 질문을 받아, 이를 DB 쿼리로 변환하고, 실행 결과를 통해 '종목코드'를 제공
-    _DEFAULT_TEMPLATE = """Human: Given an input question, first create a syntactically correct {dialect} query to run, then look at the results of the query and return the first answer. 
-<format>
-Question: "Question here"
-SQLQuery: "SQL Query to run"
-SQLResult: "Result of the SQLQuery"
-Answer: "Result of SQLResult only"
-</format>
-Assistant: Understood, I will use the above format and only provide the answer.
 
-Only use the following tables:
-<tables>
-CREATE TABLE stock_ticker (
-	symbol text PRIMARY KEY,
-	name text NOT NULL,
-	currency text,
-	stockExchange text, 
-    exchangeShortName text
-)
-</tables>
+    # TODO shuan 국내, 해외 구분하는 로직 필요
+    # ProServe 팀에서는 2번 태우는것을 추천
+    # 오픈 API를 통해 종목코드 조회
+    company_ticker = get_stock_code_from_api(company_name)
 
-If someone asks for the table stock ticker table, they really mean the stock_ticker table.
-<examples>
-Question: 
-        What is the ticker symbol for Amazon in stock ticker table?
-        Params: 
-        Company name (name): Amazon
-        
-SQLQuery:SELECT symbol FROM stock_ticker WHERE name = 'Amazon' union all SELECT symbol FROM stock_ticker WHERE name like '%Amazon%' limit 1
-
-</examples>
-
-Question: \n\nHuman:{input} \n\nAssistant:
-
-"""
-
-    PROMPT = PromptTemplate(
-        input_variables=["input", "dialect"], template=_DEFAULT_TEMPLATE
-)
-    db_chain = get_db_chain(PROMPT)
-
-    company_ticker = db_chain("\n\nHuman: What is the ticker symbol for " + str(company_name) + " in stock tickers table? \n\nAssistant:")
-
-    if company_ticker['result'] == '':
+    if not company_ticker:
         return None
-    return company_ticker['result']
+    return company_ticker
+    
+    
+##############################################################    
+
 
 def get_stock_price(ticker, history=500):
     today = date.today()
     start_date = today - timedelta(days=history)
     data = pdr.get_data_yahoo(ticker, start=start_date, end=today)
     return data
+
 
 # Fetch top 5 google news for given company name
 import re
