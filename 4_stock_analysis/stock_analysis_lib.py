@@ -13,7 +13,6 @@ from datetime import date
 from langchain.prompts.prompt import PromptTemplate
 import yfinance as yf
 
-#test
 yf.pdr_override() 
 def get_llm(k = 1):
         
@@ -29,28 +28,35 @@ def get_llm(k = 1):
     return llm
 
 def get_claude3(k = 1):
-    bedrock_runtime = boto3.client(
-        service_name="bedrock-runtime",
-        region_name="us-east-1",
-    )
+    try:
+        bedrock_runtime = boto3.client(
+            service_name="bedrock-runtime",
+            region_name="us-east-1",
+        )
+        model_id = "anthropic.claude-3-sonnet-20240229-v1:0"
+        model_kwargs = {
+            "max_tokens": 4096,
+            "temperature": 0.0,
+            "top_k": k,
+            "top_p": 1,
+            "stop_sequences": ["\n\nHuman: "],
+        }
+        model = ChatBedrock(
+            client=bedrock_runtime,
+            model_id=model_id,
+            model_kwargs=model_kwargs,
+        )
+        return model
+    except boto3.exceptions.Boto3Error as e:
+        if 'ExpiredTokenException' in str(e):
+            print(f"Error: {e}. The security token included in the request is expired. Please renew your AWS credentials.")
+        else:
+            print(f"Error initializing Claude 3 model: {e}")
+        return None
+    except Exception as e:
+        print(f"Error initializing Claude 3 model: {e}")
+        return None
 
-    model_id = "anthropic.claude-3-sonnet-20240229-v1:0"
-
-    model_kwargs =  { 
-        "max_tokens": 4096,
-        "temperature": 0.0,
-        "top_k": k,
-        "top_p": 1,
-        "stop_sequences": ["\n\nHuman: "],
-    }
-
-    model = ChatBedrock(
-        client=bedrock_runtime,
-        model_id=model_id,
-        model_kwargs=model_kwargs,
-    )
-        
-    return model
 
 def get_db_chain(prompt):
     db = SQLDatabase.from_uri("sqlite:///stock_ticker_database.db")
@@ -68,8 +74,45 @@ def get_db_chain(prompt):
 
 
 ##############################################################
-
 def get_stock_code_from_api(company_name):
+    url = "https://oapi.kbsec.com/v2.0/NIVS01/search-ticker"
+    headers = {
+        "Content-Type": "application/json",
+        "apikey": "l7xxESFi1ld7pk0ZAJKZDLGNRTcBLhtfJnRh"
+    }
+    data = {
+        "dataHeader": {
+            "udId": "UDID"
+        },
+        "dataBody": {
+            "isNm": company_name
+        }
+    }
+    
+    response = requests.post(url, json=data, headers=headers)
+    
+    if response.status_code == 200:
+        response_data = response.json()
+        
+        print('@@@@@@@@@@@@@@response_data: ', response_data)
+        
+        if response_data["dataHeader"]["resultCode"] == "200":
+            try:
+                stock_info = response_data["dataBody"]["out2"][0]
+                stock_code = stock_info["isCd"].strip()
+                market_class = stock_info["mktClsf"].strip()
+                
+                if market_class == '1':
+                    return f"{stock_code}.KS"
+                elif market_class == '2':
+                    return f"{stock_code}.KQ"
+            except (IndexError, KeyError) as e:
+                print(f"Error extracting stock info: {e}")
+    return None
+
+
+
+def get_stock_code_from_api_bk(company_name):
     url = "https://oapi.kbsec.com/v2.0/NIVS01/search-ticker"
     headers = {
         "Content-Type": "application/json",
@@ -101,6 +144,7 @@ def get_stock_code_from_api(company_name):
             elif market_class == '2':
                 return f"{stock_code}.KQ"
     return None
+    
     
 def get_stock_ticker(query):
     template = """You are a helpful assistant who extracts company name from the human input. Please only output the company. If the human input is written in Korean, return the human input as the company name. If you cannot find company name, just return NONE."""
@@ -134,11 +178,16 @@ def get_stock_ticker(query):
 ##############################################################    
 
 
+
 def get_stock_price(ticker, history=500):
     today = date.today()
     start_date = today - timedelta(days=history)
     data = pdr.get_data_yahoo(ticker, start=start_date, end=today)
     return data
+
+
+
+
 
 
 # Fetch top 5 google news for given company name
@@ -261,17 +310,24 @@ Assistant:
 from langchain.agents import AgentExecutor, create_react_agent 
 
 def initializeAgent():
-    prompt = PromptTemplate.from_template(template)
-    agent = create_react_agent(llm=get_claude3(), tools=tools, prompt=prompt)
-    agent_executor = AgentExecutor(
-        agent=agent,
-        max_iterations=7,
-        tools=tools, 
-        verbose=True, 
-        handle_parsing_errors=True,
-        return_intermediate_steps=True,
-    )
+    try:
+        prompt = PromptTemplate.from_template(template)
+        agent = create_react_agent(llm=get_claude3(), tools=tools, prompt=prompt)
+        agent_executor = AgentExecutor(
+            agent=agent,
+            max_iterations=7,
+            tools=tools,
+            verbose=True,
+            handle_parsing_errors=True,
+            return_intermediate_steps=True,
+        )
+        return agent_executor
+    except Exception as e:
+        if 'ExpiredTokenException' in str(e):
+            print(f"Error: {e}. The security token included in the request is expired. Please renew your AWS credentials.")
+        else:
+            print(f"Error initializing agent: {e}")
+        return None
 
-    return agent_executor
 
     
