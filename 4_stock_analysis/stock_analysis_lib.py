@@ -13,6 +13,11 @@ from datetime import date
 from langchain.prompts.prompt import PromptTemplate
 import yfinance as yf
 
+import boto3
+from boto3.dynamodb.conditions import Key
+from boto3.dynamodb.conditions import Attr
+
+
 yf.pdr_override() 
 def get_llm(k = 1):
         
@@ -28,28 +33,35 @@ def get_llm(k = 1):
     return llm
 
 def get_claude3(k = 1):
-    bedrock_runtime = boto3.client(
-        service_name="bedrock-runtime",
-        region_name="us-east-1",
-    )
+    try:
+        bedrock_runtime = boto3.client(
+            service_name="bedrock-runtime",
+            region_name="us-east-1",
+        )
+        model_id = "anthropic.claude-3-sonnet-20240229-v1:0"
+        model_kwargs = {
+            "max_tokens": 4096,
+            "temperature": 0.0,
+            "top_k": k,
+            "top_p": 1,
+            "stop_sequences": ["\n\nHuman: "],
+        }
+        model = ChatBedrock(
+            client=bedrock_runtime,
+            model_id=model_id,
+            model_kwargs=model_kwargs,
+        )
+        return model
+    except boto3.exceptions.Boto3Error as e:
+        if 'ExpiredTokenException' in str(e):
+            print(f"Error: {e}. The security token included in the request is expired. Please renew your AWS credentials.")
+        else:
+            print(f"Error initializing Claude 3 model: {e}")
+        return None
+    except Exception as e:
+        print(f"Error initializing Claude 3 model: {e}")
+        return None
 
-    model_id = "anthropic.claude-3-sonnet-20240229-v1:0"
-
-    model_kwargs =  { 
-        "max_tokens": 4096,
-        "temperature": 0.0,
-        "top_k": k,
-        "top_p": 1,
-        "stop_sequences": ["\n\nHuman: "],
-    }
-
-    model = ChatBedrock(
-        client=bedrock_runtime,
-        model_id=model_id,
-        model_kwargs=model_kwargs,
-    )
-        
-    return model
 
 def get_db_chain(prompt):
     db = SQLDatabase.from_uri("sqlite:///stock_ticker_database.db")
@@ -64,77 +76,130 @@ def get_db_chain(prompt):
         top_k=1,
     )
     return db_chain
-    
-def get_stock_ticker(query):
-    template = """You are a helpful assistant who extract company name from the human input. Please only output the company. If the human input is written in Korean, return the human input as the company name. If you can not find company name, just return NONE"""
-    human_template = "{text}"
-    llm = get_claude3(k = 1)
 
+
+##############################################################
+def get_stock_code_from_api(company_name):
+    url = "https://oapi.kbsec.com/v2.0/NIVS01/search-ticker"
+    headers = {
+        "Content-Type": "application/json",
+        "apikey": "l7xxESFi1ld7pk0ZAJKZDLGNRTcBLhtfJnRh"
+    }
+    data = {
+        "dataHeader": {
+            "udId": "UDID"
+        },
+        "dataBody": {
+            "isNm": company_name
+        }
+    }
+    
+    response = requests.post(url, json=data, headers=headers)
+    
+    if response.status_code == 200:
+        response_data = response.json()
+        
+        print('@@@@@@@@@@@@@@response_data: ', response_data)
+        
+        if response_data["dataHeader"]["resultCode"] == "200":
+            try:
+                stock_info = response_data["dataBody"]["out2"][0]
+                stock_code = stock_info["isCd"].strip()
+                market_class = stock_info["mktClsf"].strip()
+                
+                if market_class == '1':
+                    return f"{stock_code}.KS"
+                elif market_class == '2':
+                    return f"{stock_code}.KQ"
+            except (IndexError, KeyError) as e:
+                print(f"Error extracting stock info: {e}")
+    return None
+
+
+def get_stock_ticker(query):
+    template = """You are a helpful assistant who extracts company name from the human input. Please only output the company.
+    If the human input is written in Korean, return the human input as the company name. Do not translate it to English. If you cannot find company name, just return NONE.
+    """
+    human_template = "{text}"
+    llm = get_claude3(k=1)
     chat_prompt = ChatPromptTemplate.from_messages([
         ("system", template),
         ("human", human_template),
     ])
-
     llm_chain = LLMChain(
         llm=llm,
         prompt=chat_prompt
     )
-
-    company_name=llm_chain(query.strip())['text'].strip()
+    company_name = llm_chain(query.strip())['text'].strip()
+    print(f"Extracted company name: {company_name}")
     if "NONE" == company_name:
         return None
-    
-    _DEFAULT_TEMPLATE = """Human: Given an input question, first create a syntactically correct {dialect} query to run, then look at the results of the query and return the first answer. 
-<format>
-Question: "Question here"
-SQLQuery: "SQL Query to run"
-SQLResult: "Result of the SQLQuery"
-Answer: "Result of SQLResult only"
-</format>
-Assistant: Understood, I will use the above format and only provide the answer.
 
-Only use the following tables:
-<tables>
-CREATE TABLE stock_ticker (
-	symbol text PRIMARY KEY,
-	name text NOT NULL,
-	currency text,
-	stockExchange text, 
-    exchangeShortName text
-)
-</tables>
+    dynamodb = boto3.resource('dynamodb')
+    table = dynamodb.Table('StockCode')
+    print(f"Querying DynamoDB for company name: {company_name}")
 
-If someone asks for the table stock ticker table, they really mean the stock_ticker table.
-<examples>
-Question: 
-        What is the ticker symbol for Amazon in stock ticker table?
-        Params: 
-        Company name (name): Amazon
-        
-SQLQuery:SELECT symbol FROM stock_ticker WHERE name = 'Amazon' union all SELECT symbol FROM stock_ticker WHERE name like '%Amazon%' limit 1
+    try:
+        # 정확히 일치하는 항목 검색
+        exact_match_items = []
+        exact_match_response = table.scan(
+            FilterExpression="stock_name_kor = :name OR stock_name_eng = :name",
+            ExpressionAttributeValues={":name": company_name}
+        )
+        exact_match_items.extend(exact_match_response['Items'])
 
-</examples>
+        while 'LastEvaluatedKey' in exact_match_response:
+            exact_match_response = table.scan(
+                FilterExpression="stock_name_kor = :name OR stock_name_eng = :name",
+                ExpressionAttributeValues={":name": company_name},
+                ExclusiveStartKey=exact_match_response['LastEvaluatedKey']
+            )
+            exact_match_items.extend(exact_match_response['Items'])
 
-Question: \n\nHuman:{input} \n\nAssistant:
+        if exact_match_items:
+            exact_stock_code = exact_match_items[0]['stock_code']
+            print(f"Found exact match stock code: {exact_stock_code}")
+            return exact_stock_code
 
-"""
+        # 포함 조건 검색
+        contains_match_items = []
+        contains_match_response = table.scan(
+            FilterExpression="contains(stock_name_kor, :name) OR contains(stock_name_eng, :name)",
+            ExpressionAttributeValues={":name": company_name}
+        )
+        contains_match_items.extend(contains_match_response['Items'])
 
-    PROMPT = PromptTemplate(
-        input_variables=["input", "dialect"], template=_DEFAULT_TEMPLATE
-)
-    db_chain = get_db_chain(PROMPT)
+        while 'LastEvaluatedKey' in contains_match_response:
+            contains_match_response = table.scan(
+                FilterExpression="contains(stock_name_kor, :name) OR contains(stock_name_eng, :name)",
+                ExpressionAttributeValues={":name": company_name},
+                ExclusiveStartKey=contains_match_response['LastEvaluatedKey']
+            )
+            contains_match_items.extend(contains_match_response['Items'])
 
-    company_ticker = db_chain("\n\nHuman: What is the ticker symbol for " + str(company_name) + " in stock tickers table? \n\nAssistant:")
+        if contains_match_items:
+            contains_stock_code = contains_match_items[0]['stock_code']
+            print(f"Found contains match stock code: {contains_stock_code}")
+            return contains_stock_code
+        else:
+            print("No items found in DynamoDB contains scan.")
+            return None
 
-    if company_ticker['result'] == '':
+    except Exception as e:
+        print(f"Error querying DynamoDB: {e}")
         return None
-    return company_ticker['result']
+
+    
+##############################################################    
+
+
 
 def get_stock_price(ticker, history=500):
     today = date.today()
     start_date = today - timedelta(days=history)
     data = pdr.get_data_yahoo(ticker, start=start_date, end=today)
     return data
+
 
 # Fetch top 5 google news for given company name
 import re
@@ -197,7 +262,9 @@ tools=[
     Tool(
         name="get stock ticker",
         func=get_stock_ticker,
-        description="Get the company name and stock ticker. You should input the company name to it. If the company name is written in Korean, do not translate it. If there are no output, simply say “Sorry. I can’t advice financial recommendation because of lack of information.”."
+        # todo shuan
+        # description="Get the company name and stock ticker. You should input the company name to it. If the company name is written in Korean, do not translate it. If there are no output, simply say “Sorry. I can’t advice financial recommendation because of lack of information.”."
+        description="You are a helpful assistant who extracts company name from the human input. Please only output the company. If the human input is written in Korean, return the human input as the company name. Do not translate it to English. If you cannot find company name, just return NONE."
     ),
     Tool(
         name="get stock price",
@@ -256,17 +323,24 @@ Assistant:
 from langchain.agents import AgentExecutor, create_react_agent 
 
 def initializeAgent():
-    prompt = PromptTemplate.from_template(template)
-    agent = create_react_agent(llm=get_claude3(), tools=tools, prompt=prompt)
-    agent_executor = AgentExecutor(
-        agent=agent,
-        max_iterations=7,
-        tools=tools, 
-        verbose=True, 
-        handle_parsing_errors=True,
-        return_intermediate_steps=True,
-    )
+    try:
+        prompt = PromptTemplate.from_template(template)
+        agent = create_react_agent(llm=get_claude3(), tools=tools, prompt=prompt)
+        agent_executor = AgentExecutor(
+            agent=agent,
+            max_iterations=7,
+            tools=tools,
+            verbose=True,
+            handle_parsing_errors=True,
+            return_intermediate_steps=True,
+        )
+        return agent_executor
+    except Exception as e:
+        if 'ExpiredTokenException' in str(e):
+            print(f"Error: {e}. The security token included in the request is expired. Please renew your AWS credentials.")
+        else:
+            print(f"Error initializing agent: {e}")
+        return None
 
-    return agent_executor
 
     
