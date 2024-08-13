@@ -174,20 +174,11 @@ def get_stock_ticker(query):
         return None
     return company_ticker
     
-    
-##############################################################    
-
-
-
-def get_stock_price(ticker, history=500):
+def get_stock_price(ticker):
     today = date.today()
-    start_date = today - timedelta(days=history)
+    start_date = today - timedelta(days=500)
     data = pdr.get_data_yahoo(ticker, start=start_date, end=today)
     return data
-
-
-
-
 
 
 # Fetch top 5 google news for given company name
